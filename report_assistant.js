@@ -216,8 +216,9 @@ function renderEntryForm(){
       <label>코드 (선택)</label>
       <textarea id="ef-code" class="mono" placeholder="변경하거나 작성한 코드를 붙여넣으세요.">${esc(f.code)}</textarea>
       ` : ''}
-      <label>${isCode ? '사진 (선택)' : '실험 사진 (선택)'}</label>
+      <label>${isCode ? '사진 (선택, 여러 장 가능)' : '실험 사진 (선택, 여러 장 가능)'}</label>
       <input type="file" id="ef-photos" accept="image/*" multiple>
+      <small style="display:block; color:var(--ink-soft); margin-top:4px; margin-bottom:10px; font-family:'IBM Plex Sans KR',sans-serif;">* 여러 장의 이미지를 동시에 드래그하여 선택하거나, 여러 번 나누어 등록할 수 있습니다.</small>
       ${photoPreview}
       <label>비고 (선택)</label>
       <input type="text" id="ef-notes" placeholder="참고 자료, 다음에 해야 할 일 등" value="${esc(f.notes)}">
