@@ -192,12 +192,9 @@
 <div class="toast" id="toast"></div>
 <script>
 /* ---------------- SUPABASE 설정 ----------------
-   아래 두 값을 Supabase 대시보드 > Project Settings > API 에서
-   확인한 값으로 반드시 교체하세요.
+   Vercel 환경 변수에서 설정값을 비동기로 불러와 초기화합니다.
 ------------------------------------------------ */
-const SUPABASE_URL = 'https://YOUR_PROJECT_REF.supabase.co';
-const SUPABASE_ANON_KEY = 'YOUR_ANON_PUBLIC_KEY';
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let sb = null;
 const PHOTO_BUCKET = 'entry-photos';
 
 const APP_TITLE = "Report Compass";
@@ -848,6 +845,29 @@ ${logText}
 
 /* ---------------- INIT ---------------- */
 (async function init(){
+  try {
+    const res = await fetch('/api/config');
+    if (!res.ok) throw new Error('API response not OK');
+    const config = await res.json();
+    if (!config.supabaseUrl || !config.supabaseAnonKey) {
+      throw new Error('Supabase URL or Anon Key is missing in Vercel configuration.');
+    }
+    sb = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  } catch (err) {
+    console.error('Failed to initialize Supabase via API:', err);
+    document.getElementById('app').innerHTML = `
+      <div class="panel" style="max-width: 500px; margin: 60px auto; text-align: center; padding: 30px;">
+        <h3 style="color: var(--danger); margin-bottom: 12px;">Supabase 설정 오류</h3>
+        <p style="font-size: 14px; color: var(--ink-soft); line-height: 1.6; margin-bottom: 20px;">
+          Vercel 환경 변수(SUPABASE_URL, SUPABASE_ANON_KEY)가 올바르게 설정되지 않았거나 API 호출에 실패했습니다.<br>
+          Vercel 프로젝트 설정의 Environment Variables를 확인해 주세요.
+        </p>
+        <button class="btn primary" onclick="location.reload()">다시 시도</button>
+      </div>
+    `;
+    return;
+  }
+
   const { data: { session } } = await sb.auth.getSession();
   if(session && session.user){
     currentUser = session.user;
