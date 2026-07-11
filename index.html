@@ -63,6 +63,7 @@
   .btn.danger:hover{background:var(--danger); color:#fff;}
   .btn:disabled{opacity:0.5; cursor:not-allowed;}
   .btn:disabled:hover{background:var(--card); color:var(--ink);}
+  .btn.small{padding:5px 10px; font-size:12.5px;}
 
   .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
   .grow{flex:1;}
@@ -81,6 +82,7 @@
   .badge.exp{background:var(--teal-soft); color:var(--teal);}
   .badge.code{background:var(--copper-soft); color:#7a3d10;}
   .project-card .pname{font-weight:600; font-size:16px; margin-bottom:6px;}
+  .project-card .pdesc{font-size:12.5px; color:var(--ink-soft); line-height:1.5; margin-bottom:6px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
   .project-card .pmeta{font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-soft);}
   .empty-hint{
     border:1.5px dashed var(--border); border-radius:4px; padding:30px; text-align:center;
@@ -115,6 +117,7 @@
   /* ---- Detail view / timeline ---- */
   .detail-header{display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:6px;}
   .detail-header h2{font-family:'Space Grotesk',sans-serif; margin:0; font-size:21px;}
+  .detail-desc{font-size:13.5px; color:var(--ink-soft); line-height:1.6; margin-bottom:14px; white-space:pre-wrap;}
   .breadcrumb{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-soft); margin-bottom:10px; cursor:pointer;}
   .breadcrumb:hover{color:var(--copper);}
 
@@ -133,20 +136,14 @@
   }
   .entry-title{font-weight:600; font-size:14.5px; margin:8px 0 4px;}
   .entry-summary{font-size:13.5px; line-height:1.6; color:var(--ink); white-space:pre-wrap;}
-  .entry-code{
-    margin-top:8px; background:#101B22; color:#B7E3C7; font-family:'IBM Plex Mono',monospace; font-size:12px;
-    padding:10px 12px; border-radius:4px; white-space:pre-wrap; line-height:1.5;
+  .entry-code-block{margin-top:10px;}
+  .entry-code-lang{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--copper-soft); background:#101B22;
+    display:inline-block; padding:3px 10px; border-radius:4px 4px 0 0; letter-spacing:.03em;
   }
-  #ef-code {
-    min-height: 280px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 13px;
-    background: #1a1e21;
-    color: #b7e3c7;
-    border: 1.5px solid var(--ink);
-    line-height: 1.6;
-    padding: 12px;
-    border-radius: 4px;
+  .entry-code{
+    background:#101B22; color:#B7E3C7; font-family:'IBM Plex Mono',monospace; font-size:12px;
+    padding:10px 12px; border-radius:0 4px 4px 4px; white-space:pre-wrap; line-height:1.5; margin:0;
   }
   .entry-notes{margin-top:6px; font-size:12.5px; color:var(--ink-soft); font-style:italic;}
   .entry-actions{margin-top:8px; display:flex; gap:6px;}
@@ -168,6 +165,23 @@
     width:100%; padding:8px 10px; border:1.3px dashed var(--border); border-radius:3px;
     font-family:'IBM Plex Sans KR',sans-serif; font-size:13px; background:#fff; color:var(--ink-soft); cursor:pointer;
   }
+
+  /* ---- Code block editor (multi-language) ---- */
+  .code-block-editor{
+    border:1.3px solid var(--border); border-radius:4px; padding:12px; margin-top:10px; background:#FAFBFA;
+  }
+  .code-block-editor .cb-head{display:flex; gap:8px; align-items:center; margin-bottom:8px;}
+  .code-block-editor input[type=text]{flex:1;}
+  .code-block-editor textarea{
+    font-family:'IBM Plex Mono',monospace; font-size:12.5px; background:#101B22; color:#B7E3C7;
+    min-height:130px; border:none; border-radius:4px; padding:10px 12px;
+  }
+  .cb-remove{
+    width:26px; height:26px; border-radius:3px; border:1.3px solid var(--danger); color:var(--danger);
+    background:#fff; cursor:pointer; flex-shrink:0;
+  }
+  .cb-remove:hover{background:var(--danger); color:#fff;}
+  .add-code-block{margin-top:4px;}
 
   .section-title{font-family:'Space Grotesk',sans-serif; font-size:15px; margin:26px 0 4px; display:flex; align-items:center; gap:8px;}
   .section-title::after{content:''; flex:1; height:1.5px; background:var(--border);}
@@ -203,7 +217,8 @@
 <div class="toast" id="toast"></div>
 <script>
 /* ---------------- SUPABASE 설정 ----------------
-   Vercel 환경 변수에서 설정값을 비동기로 불러와 초기화합니다.
+   Vercel 환경 변수(SUPABASE_URL, SUPABASE_ANON_KEY)를
+   /api/config 서버리스 함수에서 읽어와 초기화합니다.
 ------------------------------------------------ */
 let sb = null;
 const PHOTO_BUCKET = 'entry-photos';
@@ -234,7 +249,8 @@ let state = {
   typeChoice: null,
   editingEntryId: null,
   newProjectName: '',
-  entryForm: { date:'', title:'', summary:'', code:'', notes:'', photos:[] },
+  newProjectDescription: '',
+  entryForm: { date:'', title:'', summary:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[] },
 };
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -246,6 +262,22 @@ function toast(msg){
   t.textContent = msg; t.classList.add('show');
   clearTimeout(toast._h);
   toast._h = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+// 여러 코드 블록을 하나의 컬럼(text)에 JSON으로 저장/파싱
+// 예전 데이터(단순 문자열)도 호환되도록 처리
+function parseCodeBlocks(raw){
+  if(!raw) return [];
+  try{
+    const parsed = JSON.parse(raw);
+    if(Array.isArray(parsed)) return parsed;
+  }catch(e){ /* not JSON: legacy plain text */ }
+  return [{ language:'Code', code: raw }];
+}
+function serializeCodeBlocks(blocks){
+  const nonEmpty = (blocks||[]).filter(b => (b.code||'').trim());
+  if(!nonEmpty.length) return null;
+  return JSON.stringify(nonEmpty.map(b=>({ language: (b.language||'').trim() || 'Code', code: b.code })));
 }
 
 function resizeImageFileToBlob(file, maxDim=1000, quality=0.72){
@@ -280,13 +312,13 @@ async function loadProjects(){
     .order('created_at', { ascending:false });
   if(error){ toast('프로젝트 불러오기 오류: ' + error.message); state.projects=[]; return; }
   state.projects = (data||[]).map(p=>({
-    id: p.id, name: p.name, type: p.type, createdAt: p.created_at.slice(0,10)
+    id: p.id, name: p.name, type: p.type, description: p.description || '', createdAt: p.created_at.slice(0,10)
   }));
 }
 
-async function createProjectRemote(name, type){
+async function createProjectRemote(name, type, description){
   const { data, error } = await sb.from('projects')
-    .insert({ name, type, user_id: currentUser.id })
+    .insert({ name, type, description: description || null, user_id: currentUser.id })
     .select().single();
   if(error){ toast('프로젝트 생성 오류: ' + error.message); return null; }
   return data;
@@ -314,7 +346,7 @@ async function loadEntries(pid){
     }
     entries.push({
       id: row.id, date: row.entry_date, title: row.title || '', summary: row.summary,
-      codeChanges: row.code_changes || '', notes: row.notes || '', photoUrls
+      codeBlocks: parseCodeBlocks(row.code_changes), notes: row.notes || '', photoUrls
     });
   }
   state.entries = entries;
@@ -327,7 +359,7 @@ async function saveEntryRemote(projectId, entryData, photoFiles){
     entry_date: entryData.date,
     title: entryData.title || null,
     summary: entryData.summary,
-    code_changes: entryData.codeChanges || null,
+    code_changes: serializeCodeBlocks(entryData.codeBlocks),
     notes: entryData.notes || null
   }).select().single();
   if(error){ toast('기록 저장 오류: ' + error.message); return null; }
@@ -418,6 +450,7 @@ function renderList(){
     <div class="project-card" data-open="${p.id}">
       <span class="badge ${cls}">${label}</span>
       <div class="pname">${esc(p.name)}</div>
+      ${p.description ? `<div class="pdesc">${esc(p.description)}</div>` : ''}
       <div class="pmeta">생성일 ${p.createdAt}</div>
     </div>`;
   }).join('');
@@ -438,6 +471,8 @@ function renderNewProject(){
       <h3>새 프로젝트</h3>
       <label>프로젝트 이름</label>
       <input type="text" id="np-name" placeholder="예: 펀치 스피드 측정 장치" value="${esc(state.newProjectName)}">
+      <label>주제 및 설명</label>
+      <textarea id="np-description" placeholder="이 프로젝트의 주제, 목적, 배경 등을 간단히 설명해주세요. 나중에 보고서 작성 시 맥락으로 활용됩니다.">${esc(state.newProjectDescription)}</textarea>
       <label>보고서 유형</label>
       <div class="type-choice">
         <div class="type-opt ${state.typeChoice==='exp'?'selected':''}" data-type="exp">
@@ -461,7 +496,12 @@ function renderDetail(){
   const label = p.type === 'exp' ? '실험 보고서' : '코딩 발명품 보고서';
 
   const entriesHtml = state.entries.map(e=>{
-    const codeBlock = e.codeChanges ? `<div class="entry-code">${esc(e.codeChanges)}</div>` : '';
+    const codeBlocksHtml = (e.codeBlocks && e.codeBlocks.length) ? e.codeBlocks.map(b => `
+      <div class="entry-code-block">
+        <span class="entry-code-lang mono">${esc(b.language || 'Code')}</span>
+        <pre class="entry-code">${esc(b.code)}</pre>
+      </div>
+    `).join('') : '';
     const notes = e.notes ? `<div class="entry-notes">📌 ${esc(e.notes)}</div>` : '';
     const photos = (e.photoUrls && e.photoUrls.length) ? `
       <div class="photo-grid">
@@ -478,7 +518,7 @@ function renderDetail(){
         </div>
         ${e.title ? `<div class="entry-title">${esc(e.title)}</div>` : ''}
         <div class="entry-summary">${esc(e.summary)}</div>
-        ${codeBlock}
+        ${codeBlocksHtml}
         ${photos}
         ${notes}
       </div>
@@ -491,6 +531,7 @@ function renderDetail(){
       <h2>${esc(p.name)}</h2>
       <span class="badge ${p.type==='exp'?'exp':'code'}">${label}</span>
     </div>
+    ${p.description ? `<div class="detail-desc">${esc(p.description)}</div>` : ''}
     <div class="row">
       <button class="btn primary" id="btn-add-entry">+ 오늘 기록 추가</button>
       <button class="btn accent" id="btn-goto-report" ${state.entries.length===0?'disabled':''}>보고서 생성 →</button>
@@ -501,6 +542,18 @@ function renderDetail(){
   `;
 }
 
+function renderCodeBlockEditor(block, index){
+  return `
+    <div class="code-block-editor" data-code-index="${index}">
+      <div class="cb-head">
+        <input type="text" class="mono cb-lang" data-cb-lang="${index}" placeholder="언어 (예: Arduino C++, Python, JavaScript)" value="${esc(block.language)}">
+        <button type="button" class="cb-remove" data-cb-remove="${index}" title="이 코드 블록 삭제">×</button>
+      </div>
+      <textarea class="mono cb-code" data-cb-code="${index}" placeholder="코드를 붙여넣으세요.">${esc(block.code)}</textarea>
+    </div>
+  `;
+}
+
 function renderEntryForm(){
   const p = currentProject();
   const isCode = p.type === 'code';
@@ -508,13 +561,19 @@ function renderEntryForm(){
 
   const photoPreview = f.photos.length ? `
     <div class="photo-grid">
-      ${f.photos.map((p,i)=>`
+      ${f.photos.map((ph,i)=>`
         <div class="photo-thumb-wrap">
-          <img class="photo-thumb" src="${p.previewUrl}">
+          <img class="photo-thumb" src="${ph.previewUrl}">
           <button type="button" class="photo-remove" data-remove-photo="${i}">×</button>
         </div>
       `).join('')}
     </div>` : '';
+
+  const codeBlocksHtml = isCode ? `
+      <label>코드 (선택, 언어별로 여러 개 추가 가능)</label>
+      ${f.codeBlocks.map((b,i)=>renderCodeBlockEditor(b,i)).join('')}
+      <button type="button" class="btn small add-code-block" id="btn-add-code-block">+ 코드 블록 추가</button>
+  ` : '';
 
   return `
     <div class="breadcrumb" id="back-to-detail">&larr; ${esc(p.name)}</div>
@@ -526,13 +585,10 @@ function renderEntryForm(){
       <input type="text" id="ef-title" placeholder="예: 초음파 센서 그룹 배선 완료" value="${esc(f.title)}">
       <label>내용 요약</label>
       <textarea id="ef-summary" placeholder="오늘 진행한 작업, 관찰한 내용, 겪은 문제와 해결 과정을 적어주세요.">${esc(f.summary)}</textarea>
-      ${isCode ? `
-      <label>코드 (선택)</label>
-      <textarea id="ef-code" class="mono" placeholder="변경하거나 작성한 코드를 붙여넣으세요.">${esc(f.code)}</textarea>
-      ` : ''}
+      ${codeBlocksHtml}
       <label>${isCode ? '사진 (선택, 여러 장 가능)' : '실험 사진 (선택, 여러 장 가능)'}</label>
       <input type="file" id="ef-photos" accept="image/*" multiple>
-      <small style="display:block; color:var(--ink-soft); margin-top:4px; margin-bottom:10px; font-family:'IBM Plex Sans KR',sans-serif;">* 여러 장의 이미지를 동시에 드래그하여 선택하거나, 여러 번 나누어 등록할 수 있습니다.</small>
+      <small style="display:block; color:var(--ink-soft); margin-top:4px; margin-bottom:10px; font-family:'IBM Plex Sans KR',sans-serif;">* 여러 장의 이미지를 동시에 선택하거나, 여러 번 나누어 등록할 수 있습니다.</small>
       ${photoPreview}
       <label>비고 (선택)</label>
       <input type="text" id="ef-notes" placeholder="참고 자료, 다음에 해야 할 일 등" value="${esc(f.notes)}">
@@ -628,7 +684,10 @@ function bindEvents(){
 
   // list
   const btnNew = document.getElementById('btn-new-project');
-  if(btnNew) btnNew.onclick = ()=>{ state.view='new-project'; state.typeChoice=null; state.newProjectName=''; render(); };
+  if(btnNew) btnNew.onclick = ()=>{
+    state.view='new-project'; state.typeChoice=null; state.newProjectName=''; state.newProjectDescription='';
+    render();
+  };
   document.querySelectorAll('[data-open]').forEach(el=>{
     el.onclick = async ()=>{
       state.currentProjectId = el.getAttribute('data-open');
@@ -645,30 +704,38 @@ function bindEvents(){
   if(backList) backList.onclick = ()=>{ state.view='list'; render(); };
   const npNameInput = document.getElementById('np-name');
   if(npNameInput) npNameInput.oninput = (e)=>{ state.newProjectName = e.target.value; };
+  const npDescInput = document.getElementById('np-description');
+  if(npDescInput) npDescInput.oninput = (e)=>{ state.newProjectDescription = e.target.value; };
   document.querySelectorAll('.type-opt').forEach(el=>{
     el.onclick = ()=>{
-      // capture current input value before re-rendering, so it isn't lost
+      // capture current input values before re-rendering, so they aren't lost
       const nameField = document.getElementById('np-name');
       if(nameField) state.newProjectName = nameField.value;
+      const descField = document.getElementById('np-description');
+      if(descField) state.newProjectDescription = descField.value;
       state.typeChoice = el.getAttribute('data-type');
       render();
     };
   });
   const btnCancelNew = document.getElementById('btn-cancel-new');
-  if(btnCancelNew) btnCancelNew.onclick = ()=>{ state.newProjectName=''; state.typeChoice=null; state.view='list'; render(); };
+  if(btnCancelNew) btnCancelNew.onclick = ()=>{
+    state.newProjectName=''; state.newProjectDescription=''; state.typeChoice=null; state.view='list'; render();
+  };
   const btnCreate = document.getElementById('btn-create-project');
   if(btnCreate) btnCreate.onclick = async ()=>{
     const name = document.getElementById('np-name').value.trim();
+    const description = document.getElementById('np-description').value.trim();
     if(!name){ toast('프로젝트 이름을 입력해주세요.'); return; }
     if(!state.typeChoice){ toast('보고서 유형을 선택해주세요.'); return; }
     btnCreate.disabled = true;
-    const proj = await createProjectRemote(name, state.typeChoice);
+    const proj = await createProjectRemote(name, state.typeChoice, description);
     btnCreate.disabled = false;
     if(!proj) return;
-    state.projects.unshift({ id: proj.id, name: proj.name, type: proj.type, createdAt: proj.created_at.slice(0,10) });
+    state.projects.unshift({ id: proj.id, name: proj.name, type: proj.type, description: proj.description || '', createdAt: proj.created_at.slice(0,10) });
     state.currentProjectId = proj.id;
     state.entries = [];
     state.newProjectName = '';
+    state.newProjectDescription = '';
     state.typeChoice = null;
     state.view = 'detail';
     render();
@@ -679,7 +746,7 @@ function bindEvents(){
   if(backDetail) backDetail.onclick = ()=>{ state.view='detail'; render(); };
   const btnAddEntry = document.getElementById('btn-add-entry');
   if(btnAddEntry) btnAddEntry.onclick = ()=>{
-    state.entryForm = { date: todayStr(), title:'', summary:'', code:'', notes:'', photos:[] };
+    state.entryForm = { date: todayStr(), title:'', summary:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[] };
     state.view='new-entry'; render();
   };
   const btnGotoReport = document.getElementById('btn-goto-report');
@@ -712,10 +779,38 @@ function bindEvents(){
   if(efTitle) efTitle.oninput = (e)=>{ state.entryForm.title = e.target.value; };
   const efSummary = document.getElementById('ef-summary');
   if(efSummary) efSummary.oninput = (e)=>{ state.entryForm.summary = e.target.value; };
-  const efCode = document.getElementById('ef-code');
-  if(efCode) efCode.oninput = (e)=>{ state.entryForm.code = e.target.value; };
   const efNotes = document.getElementById('ef-notes');
   if(efNotes) efNotes.oninput = (e)=>{ state.entryForm.notes = e.target.value; };
+
+  // multi-language code blocks
+  document.querySelectorAll('[data-cb-lang]').forEach(el=>{
+    el.oninput = (e)=>{
+      const i = parseInt(el.getAttribute('data-cb-lang'), 10);
+      if(state.entryForm.codeBlocks[i]) state.entryForm.codeBlocks[i].language = e.target.value;
+    };
+  });
+  document.querySelectorAll('[data-cb-code]').forEach(el=>{
+    el.oninput = (e)=>{
+      const i = parseInt(el.getAttribute('data-cb-code'), 10);
+      if(state.entryForm.codeBlocks[i]) state.entryForm.codeBlocks[i].code = e.target.value;
+    };
+  });
+  document.querySelectorAll('[data-cb-remove]').forEach(el=>{
+    el.onclick = ()=>{
+      const i = parseInt(el.getAttribute('data-cb-remove'), 10);
+      if(state.entryForm.codeBlocks.length <= 1){
+        state.entryForm.codeBlocks[i] = { language:'', code:'' };
+      }else{
+        state.entryForm.codeBlocks.splice(i, 1);
+      }
+      render();
+    };
+  });
+  const btnAddCodeBlock = document.getElementById('btn-add-code-block');
+  if(btnAddCodeBlock) btnAddCodeBlock.onclick = ()=>{
+    state.entryForm.codeBlocks.push({ language:'', code:'' });
+    render();
+  };
 
   const efPhotos = document.getElementById('ef-photos');
   if(efPhotos) efPhotos.onchange = (e)=>{
@@ -741,18 +836,16 @@ function bindEvents(){
     const date = (document.getElementById('ef-date').value || todayStr());
     const title = document.getElementById('ef-title').value.trim();
     const summary = document.getElementById('ef-summary').value.trim();
-    const efCodeEl = document.getElementById('ef-code');
-    const codeChanges = efCodeEl ? efCodeEl.value.trim() : '';
     const notes = document.getElementById('ef-notes').value.trim();
     if(!summary){ toast('내용 요약을 입력해주세요.'); return; }
     btnSaveEntry.disabled = true;
     btnSaveEntry.textContent = '저장 중...';
     const photoFiles = f.photos.map(p=>p.file);
-    const saved = await saveEntryRemote(state.currentProjectId, { date, title, summary, codeChanges, notes }, photoFiles);
+    const saved = await saveEntryRemote(state.currentProjectId, { date, title, summary, codeBlocks: f.codeBlocks, notes }, photoFiles);
     btnSaveEntry.disabled = false;
     if(!saved) return;
     f.photos.forEach(p=>URL.revokeObjectURL(p.previewUrl));
-    state.entryForm = { date:'', title:'', summary:'', code:'', notes:'', photos:[] };
+    state.entryForm = { date:'', title:'', summary:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[] };
     await loadEntries(state.currentProjectId);
     state.view='detail'; render();
   };
@@ -806,7 +899,11 @@ async function generateReport(){
     let block = `[${e.date}]`;
     if(e.title) block += ` ${e.title}`;
     block += `\n내용: ${e.summary}`;
-    if(p.type==='code' && e.codeChanges) block += `\n코드: ${e.codeChanges}`;
+    if(p.type==='code' && e.codeBlocks && e.codeBlocks.length){
+      for(const cb of e.codeBlocks){
+        block += `\n[코드 - ${cb.language || 'Code'}]\n${cb.code}`;
+      }
+    }
     if(e.photoUrls && e.photoUrls.length) block += `\n(사진 ${e.photoUrls.length}장 첨부됨)`;
     if(e.notes) block += `\n비고: ${e.notes}`;
     return block;
@@ -822,6 +919,7 @@ async function generateReport(){
 
 프로젝트 이름: ${p.name}
 보고서 유형: ${typeLabel}
+${p.description ? `프로젝트 주제/설명: ${p.description}` : ''}
 
 ${formatInstruction}
 
