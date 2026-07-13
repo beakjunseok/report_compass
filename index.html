@@ -500,7 +500,7 @@ function renderAuth(){
           </button>
         </div>
         ${state.authError ? `<div class="auth-error">${esc(state.authError)}</div>` : ''}
-        ${state.authMode==='signup' ? `<div class="pmeta" style="margin-top:10px; color:var(--ink-soft);">아이디는 4자 이상, 영문/숫자만 사용해주세요.</div>` : ''}
+        ${state.authMode==='signup' ? `<div class="pmeta" style="margin-top:10px; color:var(--ink-soft);">아이디는 3자 이상, 영문/숫자만 사용해주세요.</div>` : ''}
       </div>
     </div>
   `;
@@ -761,7 +761,7 @@ function bindEvents(){
     const username = document.getElementById('auth-email').value.trim();
     const password = document.getElementById('auth-password').value;
     if(!username || !password){ state.authError='아이디와 비밀번호를 입력해주세요.'; render(); return; }
-    if(!/^[a-zA-Z0-9_]{4,}$/.test(username)){ state.authError='아이디는 4자 이상의 영문/숫자/밑줄만 사용할 수 있어요.'; render(); return; }
+    if(!/^[a-zA-Z0-9_]{3,}$/.test(username)){ state.authError='아이디는 3자 이상의 영문/숫자/밑줄만 사용할 수 있어요.'; render(); return; }
     const email = usernameToEmail(username);
     state.authLoading = true; state.authError=''; render();
     let result;
