@@ -249,6 +249,9 @@ let state = {
   reportLoading: false,
   formatMode: 'default', // default | custom
   customFormat: '',
+  formatTemplates: [],
+  selectedTemplateId: '',
+  templateNameInput: '',
   typeChoice: null,
   editingEntryId: null,
   newProjectName: '',
@@ -330,6 +333,28 @@ async function createProjectRemote(name, type, description){
 async function deleteProjectRemote(id){
   const { error } = await sb.from('projects').delete().eq('id', id);
   if(error){ toast('프로젝트 삭제 오류: ' + error.message); return false; }
+  return true;
+}
+
+async function loadFormatTemplates(){
+  const { data, error } = await sb.from('format_templates')
+    .select('*')
+    .order('created_at', { ascending:false });
+  if(error){ toast('형식 템플릿 불러오기 오류: ' + error.message); state.formatTemplates=[]; return; }
+  state.formatTemplates = (data||[]).map(t=>({ id:t.id, type:t.type, name:t.name, content:t.content }));
+}
+
+async function saveFormatTemplateRemote(type, name, content){
+  const { data, error } = await sb.from('format_templates')
+    .insert({ type, name, content, user_id: currentUser.id })
+    .select().single();
+  if(error){ toast('템플릿 저장 오류: ' + error.message); return null; }
+  return data;
+}
+
+async function deleteFormatTemplateRemote(id){
+  const { error } = await sb.from('format_templates').delete().eq('id', id);
+  if(error){ toast('템플릿 삭제 오류: ' + error.message); return false; }
   return true;
 }
 
@@ -641,6 +666,27 @@ function renderEntryForm(){
 
 function renderReport(){
   const p = currentProject();
+  const myTemplates = state.formatTemplates.filter(t=>t.type===p.type);
+  const templateOptions = myTemplates.map(t=>
+    `<option value="${t.id}" ${state.selectedTemplateId===t.id?'selected':''}>${esc(t.name)}</option>`
+  ).join('');
+
+  const templateManagerHtml = state.formatMode==='custom' ? `
+        <label>저장된 형식 불러오기 (${p.type==='exp'?'실험 보고서용':'코딩 보고서용'}, 선택)</label>
+        <div class="row">
+          <select id="fmt-template-select" class="grow">
+            <option value="">-- 새로 작성 --</option>
+            ${templateOptions}
+          </select>
+          <button class="btn danger small" id="btn-delete-template" ${state.selectedTemplateId?'':'disabled'}>삭제</button>
+        </div>
+        <textarea id="custom-format-input" placeholder="원하는 보고서 형식/목차를 붙여넣거나 설명해주세요. 예: '1. 탐구 동기 2. 탐구 과정 3. 결과 및 느낀점 순서로, 학교 생기부 제출용으로 정중한 문어체로 작성해줘'. 실제 예시 보고서 전문을 붙여넣으면 그 문체를 따라 작성합니다." style="min-height:100px;">${esc(state.customFormat)}</textarea>
+        <div class="row" style="margin-top:8px;">
+          <input type="text" id="fmt-template-name" placeholder="이 형식을 템플릿으로 저장할 이름 (예: 학교 제출용 실험 보고서)" class="grow" value="${esc(state.templateNameInput)}">
+          <button class="btn small" id="btn-save-template">템플릿으로 저장</button>
+        </div>
+  ` : `<div class="pmeta" style="margin-top:6px; color:var(--ink-soft);">유형에 맞는 표준 구성(동기·과정·결과·고찰)으로 자동 작성됩니다.</div>`;
+
   return `
     <div class="breadcrumb" id="back-to-detail">&larr; ${esc(p.name)}</div>
     <div class="panel">
@@ -649,9 +695,7 @@ function renderReport(){
         <button class="btn ${state.formatMode==='default'?'primary':''}" id="fmt-default">기본 형식으로 작성</button>
         <button class="btn ${state.formatMode==='custom'?'primary':''}" id="fmt-custom">형식 직접 입력</button>
       </div>
-      ${state.formatMode==='custom' ? `
-        <textarea id="custom-format-input" placeholder="원하는 보고서 형식/목차를 붙여넣거나 설명해주세요. 예: '1. 탐구 동기 2. 탐구 과정 3. 결과 및 느낀점 순서로, 학교 생기부 제출용으로 정중한 문어체로 작성해줘'" style="min-height:100px;">${esc(state.customFormat)}</textarea>
-      ` : `<div class="pmeta" style="margin-top:6px; color:var(--ink-soft);">유형에 맞는 표준 구성(동기·과정·결과·고찰)으로 자동 작성됩니다.</div>`}
+      ${templateManagerHtml}
       <div class="row" style="margin-top:16px;">
         <button class="btn accent" id="btn-generate" ${state.reportLoading?'disabled':''}>${state.reportLoading?'생성 중...':'보고서 생성'}</button>
       </div>
@@ -710,6 +754,7 @@ function bindEvents(){
     state.authEmail=''; state.authPassword='';
     state.view='list';
     await loadProjects();
+    await loadFormatTemplates();
     render();
   };
   const btnLogout = document.getElementById('btn-logout');
@@ -717,7 +762,7 @@ function bindEvents(){
     await sb.auth.signOut();
     currentUser = null;
     state.view = 'auth';
-    state.projects = []; state.entries = [];
+    state.projects = []; state.entries = []; state.formatTemplates = [];
     render();
   };
 
@@ -734,6 +779,7 @@ function bindEvents(){
       state.view='detail'; render();
       await loadEntries(state.currentProjectId);
       state.reportText=''; state.formatMode='default'; state.customFormat='';
+      state.selectedTemplateId=''; state.templateNameInput='';
       render();
     };
   });
@@ -789,7 +835,11 @@ function bindEvents(){
     state.view='new-entry'; render();
   };
   const btnGotoReport = document.getElementById('btn-goto-report');
-  if(btnGotoReport) btnGotoReport.onclick = ()=>{ state.view='report'; state.reportText=''; render(); };
+  if(btnGotoReport) btnGotoReport.onclick = ()=>{
+    state.view='report'; state.reportText=''; state.formatMode='default'; state.customFormat='';
+    state.selectedTemplateId=''; state.templateNameInput='';
+    render();
+  };
   const btnDelProject = document.getElementById('btn-delete-project');
   if(btnDelProject) btnDelProject.onclick = async ()=>{
     if(!confirm('이 프로젝트와 모든 기록을 삭제할까요? 되돌릴 수 없습니다.')) return;
@@ -918,6 +968,46 @@ function bindEvents(){
   if(fmtCustom) fmtCustom.onclick = ()=>{ state.formatMode='custom'; render(); };
   const customInput = document.getElementById('custom-format-input');
   if(customInput) customInput.oninput = (e)=>{ state.customFormat = e.target.value; };
+  const fmtTemplateSelect = document.getElementById('fmt-template-select');
+  if(fmtTemplateSelect) fmtTemplateSelect.onchange = (e)=>{
+    const id = e.target.value;
+    state.selectedTemplateId = id;
+    if(id){
+      const tpl = state.formatTemplates.find(t=>t.id===id);
+      state.customFormat = tpl ? tpl.content : '';
+    }
+    render();
+  };
+  const fmtTemplateName = document.getElementById('fmt-template-name');
+  if(fmtTemplateName) fmtTemplateName.oninput = (e)=>{ state.templateNameInput = e.target.value; };
+  const btnSaveTemplate = document.getElementById('btn-save-template');
+  if(btnSaveTemplate) btnSaveTemplate.onclick = async ()=>{
+    const p = currentProject();
+    const name = document.getElementById('fmt-template-name').value.trim();
+    const content = document.getElementById('custom-format-input').value.trim();
+    if(!name){ toast('템플릿 이름을 입력해주세요.'); return; }
+    if(!content){ toast('저장할 형식 내용을 입력해주세요.'); return; }
+    btnSaveTemplate.disabled = true;
+    const saved = await saveFormatTemplateRemote(p.type, name, content);
+    btnSaveTemplate.disabled = false;
+    if(!saved) return;
+    state.formatTemplates.unshift({ id: saved.id, type: saved.type, name: saved.name, content: saved.content });
+    state.selectedTemplateId = saved.id;
+    state.templateNameInput = '';
+    state.customFormat = content;
+    toast('템플릿을 저장했습니다.');
+    render();
+  };
+  const btnDeleteTemplate = document.getElementById('btn-delete-template');
+  if(btnDeleteTemplate) btnDeleteTemplate.onclick = async ()=>{
+    if(!state.selectedTemplateId) return;
+    if(!confirm('이 템플릿을 삭제할까요?')) return;
+    const ok = await deleteFormatTemplateRemote(state.selectedTemplateId);
+    if(!ok) return;
+    state.formatTemplates = state.formatTemplates.filter(t=>t.id!==state.selectedTemplateId);
+    state.selectedTemplateId = '';
+    render();
+  };
   const btnGenerate = document.getElementById('btn-generate');
   if(btnGenerate) btnGenerate.onclick = generateReport;
   const btnCopy = document.getElementById('btn-copy-report');
@@ -1041,6 +1131,7 @@ ${logText}
     currentUser = session.user;
     state.view = 'list';
     await loadProjects();
+    await loadFormatTemplates();
   }
   render();
 
