@@ -300,6 +300,26 @@ function toast(msg){
   toast._h = setTimeout(()=>t.classList.remove('show'), 2200);
 }
 
+// 코드 내용을 보고 프로그래밍 언어를 추정 (간단한 패턴 매칭, 완벽하지 않음)
+function guessCodeLanguage(code){
+  const c = (code || '').trim();
+  if(!c) return null;
+  if(/\b(void\s+setup\s*\(|void\s+loop\s*\(|digitalWrite\s*\(|digitalRead\s*\(|pinMode\s*\(|analogRead\s*\(|analogWrite\s*\(|Serial\.(begin|print|println)\s*\()/.test(c)) return 'Arduino C++';
+  if(/\b(SELECT\s+.+\s+FROM|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|CREATE\s+TABLE)\b/i.test(c)) return 'SQL';
+  if(/<!doctype html>|<html[\s>]|<\/html>|<div[\s>]|<body[\s>]/i.test(c)) return 'HTML';
+  if(/^\s*[\{\[]/.test(c) && /^\s*[\{\[][\s\S]*[\}\]]\s*$/.test(c)){
+    try{ JSON.parse(c); return 'JSON'; }catch(e){ /* not JSON */ }
+  }
+  if(/(^|\n)\s*(def |import |from \S+ import |elif |print\s*\()|:\s*\n\s+\S|self\./.test(c)) return 'Python';
+  if(/\b(public\s+class\s+\w+|public\s+static\s+void\s+main\s*\(|System\.out\.println)/.test(c)) return 'Java';
+  if(/#include\s*<[\w.]+>|std::|cout\s*<<|cin\s*>>/.test(c)) return 'C++';
+  if(/#include\s*<[\w.]+\.h>|int\s+main\s*\(\s*(void)?\s*\)\s*\{/.test(c)) return 'C';
+  if(/\binterface\s+\w+\s*\{|:\s*(string|number|boolean)\s*[,)=;]/.test(c)) return 'TypeScript';
+  if(/\b(function\s*\w*\s*\(|=>|const\s+\w+\s*=|let\s+\w+\s*=|console\.log\s*\(|document\.|require\s*\()/.test(c)) return 'JavaScript';
+  if(/^#!\/bin\/(ba)?sh|(^|\n)\s*(echo\s+["']|sudo\s+|apt-get\s+|npm\s+install)/m.test(c)) return 'Shell';
+  return null;
+}
+
 // 여러 코드 블록을 하나의 컬럼(text)에 JSON으로 저장/파싱
 // 예전 데이터(단순 문자열)도 호환되도록 처리
 function parseCodeBlocks(raw){
@@ -1017,12 +1037,21 @@ function bindEvents(){
     el.oninput = (e)=>{
       const i = parseInt(el.getAttribute('data-cb-lang'), 10);
       if(state.entryForm.codeBlocks[i]) state.entryForm.codeBlocks[i].language = e.target.value;
+      el.dataset.userSet = '1'; // 사용자가 직접 입력한 이후로는 자동 감지가 덮어쓰지 않도록 표시
     };
   });
   document.querySelectorAll('[data-cb-code]').forEach(el=>{
     el.oninput = (e)=>{
       const i = parseInt(el.getAttribute('data-cb-code'), 10);
       if(state.entryForm.codeBlocks[i]) state.entryForm.codeBlocks[i].code = e.target.value;
+      const langEl = document.querySelector(`[data-cb-lang="${i}"]`);
+      if(langEl && langEl.dataset.userSet !== '1'){
+        const guess = guessCodeLanguage(e.target.value);
+        if(guess){
+          langEl.value = guess;
+          state.entryForm.codeBlocks[i].language = guess;
+        }
+      }
     };
   });
   document.querySelectorAll('[data-cb-remove]').forEach(el=>{
