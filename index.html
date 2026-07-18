@@ -262,6 +262,20 @@ async function extractTextFromFormatFile(file){
   throw new Error('지원하지 않는 파일 형식입니다. PDF, DOCX, TXT 파일만 가능합니다.');
 }
 
+// 파일을 base64 문자열로 변환 (Gemini에 직접 첨부하기 위함)
+function fileToBase64(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      const result = reader.result || '';
+      const base64 = result.slice(result.indexOf(',') + 1);
+      resolve(base64);
+    };
+    reader.onerror = ()=>reject(new Error('파일을 읽을 수 없습니다.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 const APP_TITLE = "Report Compass";
 const FAKE_EMAIL_DOMAIN = 'reportcompass.com';
 function usernameToEmail(username){
@@ -286,6 +300,7 @@ let state = {
   reportLoading: false,
   formatMode: 'default', // default | custom
   customFormat: '',
+  formatFile: null, // { name, mimeType, base64 } - PDF를 텍스트 추출 없이 그대로 AI에 첨부
   formatTemplates: [],
   selectedTemplateId: '',
   templateNameInput: '',
@@ -902,10 +917,15 @@ function renderReport(){
           </select>
           <button class="btn danger small" id="btn-delete-template" ${state.selectedTemplateId?'':'disabled'}>삭제</button>
         </div>
-        <label>파일에서 형식 가져오기 (선택, PDF/DOCX/TXT)</label>
-        <input type="file" id="fmt-file-input" accept=".pdf,.docx,.txt">
-        <small style="display:block; color:var(--ink-soft); margin-top:4px; margin-bottom:10px; font-family:'IBM Plex Sans KR',sans-serif;">* 대회 양식 안내문이나 예시 보고서 파일을 올리면 텍스트를 추출해 아래 칸에 채워줍니다.</small>
-        <textarea id="custom-format-input" placeholder="원하는 보고서 형식/목차를 붙여넣거나 설명해주세요. 예: '1. 탐구 동기 2. 탐구 과정 3. 결과 및 느낀점 순서로, 학교 생기부 제출용으로 정중한 문어체로 작성해줘'. 실제 예시 보고서 전문을 붙여넣으면 그 문체를 따라 작성합니다." style="min-height:100px;">${esc(state.customFormat)}</textarea>
+        <label>파일에서 형식 가져오기 (선택)</label>
+        ${state.formatFile ? `
+          <div class="row" style="align-items:center; margin-bottom:8px;">
+            <span class="pmeta">📎 ${esc(state.formatFile.name)} — 형식 설명서로 AI에 그대로 첨부됩니다</span>
+            <button type="button" class="btn danger small" id="btn-remove-format-file">제거</button>
+          </div>
+        ` : `<input type="file" id="fmt-file-input" accept=".pdf,.docx,.txt">`}
+        <small style="display:block; color:var(--ink-soft); margin-top:4px; margin-bottom:10px; font-family:'IBM Plex Sans KR',sans-serif;">* PDF는 파일을 그대로 AI에 첨부해 형식 설명서로 삼습니다(텍스트 추출 안 함). DOCX/TXT는 텍스트만 추출해 아래 칸에 채워집니다.</small>
+        <textarea id="custom-format-input" placeholder="원하는 보고서 형식/목차를 붙여넣거나 설명해주세요. 예: '1. 탐구 동기 2. 탐구 과정 3. 결과 및 느낀점 순서로, 학교 생기부 제출용으로 정중한 문어체로 작성해줘'. PDF를 첨부한 경우, 여기 내용은 추가 지침으로 함께 사용됩니다." style="min-height:100px;">${esc(state.customFormat)}</textarea>
         <div class="row" style="margin-top:8px;">
           <input type="text" id="fmt-template-name" placeholder="이 형식을 템플릿으로 저장할 이름 (예: 학교 제출용 실험 보고서)" class="grow" value="${esc(state.templateNameInput)}">
           <button class="btn small" id="btn-save-template">템플릿으로 저장</button>
@@ -1005,7 +1025,7 @@ function bindEvents(){
       state.expandedEntryIds = [];
       state.view='detail'; render();
       await loadEntries(state.currentProjectId);
-      state.reportText=''; state.formatMode='default'; state.customFormat='';
+      state.reportText=''; state.formatMode='default'; state.customFormat=''; state.formatFile=null;
       state.selectedTemplateId=''; state.templateNameInput='';
       render();
     };
@@ -1064,7 +1084,7 @@ function bindEvents(){
   };
   const btnGotoReport = document.getElementById('btn-goto-report');
   if(btnGotoReport) btnGotoReport.onclick = ()=>{
-    state.view='report'; state.reportText=''; state.formatMode='default'; state.customFormat='';
+    state.view='report'; state.reportText=''; state.formatMode='default'; state.customFormat=''; state.formatFile=null;
     state.selectedTemplateId=''; state.templateNameInput='';
     render();
   };
@@ -1264,6 +1284,23 @@ function bindEvents(){
   if(fmtFileInput) fmtFileInput.onchange = async (e)=>{
     const file = e.target.files && e.target.files[0];
     if(!file) return;
+    if(file.name.toLowerCase().endsWith('.pdf')){
+      if(file.size > 4 * 1024 * 1024){
+        toast('PDF가 너무 큽니다 (4MB 이하로 올려주세요).');
+        e.target.value = '';
+        return;
+      }
+      toast('PDF 파일을 첨부하는 중...');
+      try{
+        const base64 = await fileToBase64(file);
+        state.formatFile = { name: file.name, mimeType: 'application/pdf', base64 };
+        toast('PDF를 형식 설명서로 첨부했습니다.');
+        render();
+      }catch(err){
+        toast('파일 처리 오류: ' + err.message);
+      }
+      return;
+    }
     toast('파일에서 텍스트를 추출하는 중...');
     try{
       const text = await extractTextFromFormatFile(file);
@@ -1277,6 +1314,11 @@ function bindEvents(){
     }catch(err){
       toast('파일 처리 오류: ' + err.message);
     }
+  };
+  const btnRemoveFormatFile = document.getElementById('btn-remove-format-file');
+  if(btnRemoveFormatFile) btnRemoveFormatFile.onclick = ()=>{
+    state.formatFile = null;
+    render();
   };
   const btnSaveTemplate = document.getElementById('btn-save-template');
   if(btnSaveTemplate) btnSaveTemplate.onclick = async ()=>{
@@ -1375,7 +1417,7 @@ async function generateReport(){
   if(state.formatMode==='custom'){
     const el = document.getElementById('custom-format-input');
     if(el) state.customFormat = el.value.trim();
-    if(!state.customFormat){ toast('원하는 형식을 입력해주세요.'); return; }
+    if(!state.customFormat && !state.formatFile){ toast('원하는 형식을 입력하거나 형식 파일을 첨부해주세요.'); return; }
   }
   state.reportLoading = true;
   state.reportText = '';
@@ -1400,11 +1442,17 @@ async function generateReport(){
     return block;
   }).join('\n\n');
 
-  const formatInstruction = state.formatMode==='custom'
-    ? `사용자가 요청한 다음 형식/목차를 반드시 따라서 작성하세요:\n"""\n${state.customFormat}\n"""`
-    : (p.type==='exp'
-        ? '다음 표준 실험 보고서 구성으로 작성하세요: 1) 탐구 동기 및 목적, 2) 실험 도구 및 재료, 3) 탐구(실험) 과정, 4) 결과 및 데이터 정리(로그에 기록된 수치·데이터를 표나 목록으로 정리), 5) 결론 및 느낀점/향후 탐구 방향.'
-        : '다음 표준 프로젝트 보고서 구성으로 작성하세요: 1) 프로젝트 개요 및 목적, 2) 사용 기술/도구 스택, 3) 설계 및 구현 과정(주요 기술적 의사결정 포함), 4) 주요 코드/회로 변경 내역 요약, 5) 결과 및 느낀점, 6) 참고 자료, 7) 향후 개선 방향.');
+  let formatInstruction;
+  if(state.formatMode==='custom' && state.formatFile){
+    formatInstruction = `첨부된 파일은 이 보고서가 따라야 할 형식/양식 설명서야. 첨부 파일에 나온 목차, 항목 구성, 분량 기준을 최대한 그대로 따라서 작성해줘.`
+      + (state.customFormat ? `\n추가로 다음 지침도 함께 반영해줘:\n"""\n${state.customFormat}\n"""` : '');
+  } else if(state.formatMode==='custom'){
+    formatInstruction = `사용자가 요청한 다음 형식/목차를 반드시 따라서 작성하세요:\n"""\n${state.customFormat}\n"""`;
+  } else {
+    formatInstruction = p.type==='exp'
+      ? '다음 표준 실험 보고서 구성으로 작성하세요: 1) 탐구 동기 및 목적, 2) 실험 도구 및 재료, 3) 탐구(실험) 과정, 4) 결과 및 데이터 정리(로그에 기록된 수치·데이터를 표나 목록으로 정리), 5) 결론 및 느낀점/향후 탐구 방향.'
+      : '다음 표준 프로젝트 보고서 구성으로 작성하세요: 1) 프로젝트 개요 및 목적, 2) 사용 기술/도구 스택, 3) 설계 및 구현 과정(주요 기술적 의사결정 포함), 4) 주요 코드/회로 변경 내역 요약, 5) 결과 및 느낀점, 6) 참고 자료, 7) 향후 개선 방향.';
+  }
 
   const prompt = `너는 한국 고등학생의 ${typeLabel} 작성을 돕는 도우미야. 아래는 날짜별로 기록된 프로젝트 로그야. 이 로그들을 바탕으로 하나의 완성된 보고서를 한국어로 작성해줘.
 
@@ -1428,7 +1476,10 @@ ${logText}
     const response = await fetch('/api/generate-report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({
+        prompt,
+        file: state.formatFile ? { mimeType: state.formatFile.mimeType, base64: state.formatFile.base64 } : undefined
+      })
     });
     const data = await response.json();
     if(!response.ok){

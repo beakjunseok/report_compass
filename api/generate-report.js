@@ -17,11 +17,17 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { prompt } = req.body || {};
+  const { prompt, file } = req.body || {};
   if (!prompt) {
     res.status(400).json({ error: 'prompt가 필요합니다.' });
     return;
   }
+
+  const parts = [];
+  if (file && file.base64 && file.mimeType) {
+    parts.push({ inlineData: { mimeType: file.mimeType, data: file.base64 } });
+  }
+  parts.push({ text: prompt });
 
   try {
     const response = await fetch(
@@ -29,7 +35,7 @@ module.exports = async (req, res) => {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        body: JSON.stringify({ contents: [{ parts }] }),
       }
     );
     const data = await response.json();
