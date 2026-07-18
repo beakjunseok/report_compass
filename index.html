@@ -153,6 +153,11 @@
   .entry-notes{margin-top:6px; font-size:12.5px; color:var(--ink-soft); font-style:italic;}
   .entry-actions{margin-top:8px; display:flex; gap:6px;}
   .entry-actions .btn{padding:4px 10px; font-size:12px;}
+  .entry-header{display:flex; align-items:center; gap:8px; cursor:pointer; margin:8px 0 0;}
+  .entry-header:hover .entry-title{color:var(--copper);}
+  .entry-toggle{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); flex-shrink:0; width:12px;}
+  .entry-header .entry-title{margin:0; transition:color .12s ease;}
+  .entry-body{margin-top:4px;}
 
   .photo-grid{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
   .photo-thumb{
@@ -275,6 +280,7 @@ let state = {
   projects: [],
   currentProjectId: null,
   entries: [],
+  expandedEntryIds: [],
   reportText: '',
   reportLoading: false,
   formatMode: 'default', // default | custom
@@ -286,7 +292,7 @@ let state = {
   editingEntryId: null,
   newProjectName: '',
   newProjectDescription: '',
-  entryForm: { date:'', title:'', summary:'', materials:'', resultData:'', techStack:'', referenceLinks:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[] },
+  entryForm: { date:'', title:'', summary:'', materials:'', resultData:'', techStack:'', referenceLinks:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[], existingPhotos:[], removedPhotos:[] },
 };
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -514,16 +520,16 @@ async function loadEntries(pid){
 
   const entries = [];
   for(const row of (data||[])){
-    const photoUrls = [];
+    const photos = [];
     for(const ph of (row.entry_photos||[])){
       const { data: signed } = await sb.storage.from(PHOTO_BUCKET).createSignedUrl(ph.storage_path, 3600);
-      if(signed) photoUrls.push(signed.signedUrl);
+      if(signed) photos.push({ id: ph.id, storagePath: ph.storage_path, url: signed.signedUrl });
     }
     entries.push({
       id: row.id, date: row.entry_date, title: row.title || '', summary: row.summary,
       materials: row.materials || '', resultData: row.result_data || '',
       techStack: row.tech_stack || '', referenceLinks: row.reference_links || '',
-      codeBlocks: parseCodeBlocks(row.code_changes), notes: row.notes || '', photoUrls
+      codeBlocks: parseCodeBlocks(row.code_changes), notes: row.notes || '', photos
     });
   }
   state.entries = entries;
@@ -562,6 +568,47 @@ async function saveEntryRemote(projectId, entryData, photoFiles){
 async function deleteEntryRemote(id){
   const { error } = await sb.from('entries').delete().eq('id', id);
   if(error){ toast('기록 삭제 오류: ' + error.message); return false; }
+  return true;
+}
+
+async function updateEntryRemote(id, entryData, newPhotoFiles, removedPhotos){
+  const { error } = await sb.from('entries').update({
+    entry_date: entryData.date,
+    title: entryData.title || null,
+    summary: entryData.summary,
+    materials: entryData.materials || null,
+    result_data: entryData.resultData || null,
+    tech_stack: entryData.techStack || null,
+    reference_links: entryData.referenceLinks || null,
+    code_changes: serializeCodeBlocks(entryData.codeBlocks),
+    notes: entryData.notes || null
+  }).eq('id', id);
+  if(error){ toast('기록 수정 오류: ' + error.message); return false; }
+
+  for(const photo of (removedPhotos||[])){
+    await deleteEntryPhotoRemote(photo);
+  }
+
+  for(const file of (newPhotoFiles||[])){
+    try{
+      const blob = await resizeImageFileToBlob(file);
+      const path = `${currentUser.id}/${id}/${uid()}.jpg`;
+      const { error: upErr } = await sb.storage.from(PHOTO_BUCKET).upload(path, blob, { contentType:'image/jpeg' });
+      if(upErr){ toast('사진 업로드 오류: ' + upErr.message); continue; }
+      await sb.from('entry_photos').insert({ entry_id: id, user_id: currentUser.id, storage_path: path });
+    }catch(err){
+      toast('사진 처리 오류: ' + err.message);
+    }
+  }
+  return true;
+}
+
+async function deleteEntryPhotoRemote(photo){
+  if(photo.storagePath){
+    await sb.storage.from(PHOTO_BUCKET).remove([photo.storagePath]);
+  }
+  const { error } = await sb.from('entry_photos').delete().eq('id', photo.id);
+  if(error){ toast('사진 삭제 오류: ' + error.message); return false; }
   return true;
 }
 
@@ -677,6 +724,7 @@ function renderDetail(){
   const label = p.type === 'exp' ? '실험 보고서' : '코딩 발명품 보고서';
 
   const entriesHtml = state.entries.map(e=>{
+    const isExpanded = state.expandedEntryIds.includes(e.id);
     const codeBlocksHtml = (e.codeBlocks && e.codeBlocks.length) ? e.codeBlocks.map(b => `
       <div class="entry-code-block">
         <span class="entry-code-lang mono">${esc(b.language || 'Code')}</span>
@@ -692,20 +740,15 @@ function renderDetail(){
       ).join('<br>')
     }</div>` : '';
     const notes = e.notes ? `<div class="entry-notes">📌 ${esc(e.notes)}</div>` : '';
-    const photos = (e.photoUrls && e.photoUrls.length) ? `
+    const photos = (e.photos && e.photos.length) ? `
       <div class="photo-grid">
-        ${e.photoUrls.map(src=>`<img class="photo-thumb" src="${src}" data-full="${src}">`).join('')}
+        ${e.photos.map(ph=>`<img class="photo-thumb" src="${ph.url}" data-full="${ph.url}">`).join('')}
       </div>` : '';
-    return `
-    <div class="entry">
-      <div class="entry-card">
-        <div class="entry-top">
-          <span class="stamp mono">${e.date}</span>
-          <div class="entry-actions">
-            <button class="btn ghost" data-del-entry="${e.id}">삭제</button>
-          </div>
-        </div>
-        ${e.title ? `<div class="entry-title">${esc(e.title)}</div>` : ''}
+    const titleLabel = e.title
+      ? esc(e.title)
+      : esc((e.summary||'').slice(0,40)) + ((e.summary||'').length>40 ? '…' : '');
+    const body = isExpanded ? `
+      <div class="entry-body">
         <div class="entry-summary">${esc(e.summary)}</div>
         ${materials}
         ${resultData}
@@ -714,6 +757,23 @@ function renderDetail(){
         ${referenceLinks}
         ${photos}
         ${notes}
+      </div>
+    ` : '';
+    return `
+    <div class="entry">
+      <div class="entry-card">
+        <div class="entry-top">
+          <span class="stamp mono">${e.date}</span>
+          <div class="entry-actions">
+            <button class="btn ghost" data-edit-entry="${e.id}">수정</button>
+            <button class="btn ghost" data-del-entry="${e.id}">삭제</button>
+          </div>
+        </div>
+        <div class="entry-header" data-toggle-entry="${e.id}">
+          <span class="entry-toggle mono">${isExpanded ? '▾' : '▸'}</span>
+          <div class="entry-title">${titleLabel}</div>
+        </div>
+        ${body}
       </div>
     </div>`;
   }).join('');
@@ -752,6 +812,16 @@ function renderEntryForm(){
   const isCode = p.type === 'code';
   const f = state.entryForm;
 
+  const existingPhotoPreview = (f.existingPhotos && f.existingPhotos.length) ? `
+    <div class="photo-grid">
+      ${f.existingPhotos.map(ph=>`
+        <div class="photo-thumb-wrap">
+          <img class="photo-thumb" src="${ph.url}">
+          <button type="button" class="photo-remove" data-remove-existing-photo="${ph.id}">×</button>
+        </div>
+      `).join('')}
+    </div>` : '';
+
   const photoPreview = f.photos.length ? `
     <div class="photo-grid">
       ${f.photos.map((ph,i)=>`
@@ -783,7 +853,7 @@ function renderEntryForm(){
   return `
     <div class="breadcrumb" id="back-to-detail">&larr; ${esc(p.name)}</div>
     <div class="panel">
-      <h3>새 기록 추가</h3>
+      <h3>${state.editingEntryId ? '기록 수정' : '새 기록 추가'}</h3>
       <label>날짜</label>
       <input type="date" id="ef-date" value="${f.date || todayStr()}">
       <label>제목 (선택)</label>
@@ -798,13 +868,14 @@ function renderEntryForm(){
       <textarea id="ef-reference-links" placeholder="참고한 문서, 영상 URL을 한 줄에 하나씩 입력해주세요.">${esc(f.referenceLinks)}</textarea>
       ` : ''}
       <label>${isCode ? '사진 (선택, 여러 장 가능)' : '실험 사진 (선택, 여러 장 가능)'}</label>
+      ${existingPhotoPreview}
       <input type="file" id="ef-photos" accept="image/*" multiple>
       <small style="display:block; color:var(--ink-soft); margin-top:4px; margin-bottom:10px; font-family:'IBM Plex Sans KR',sans-serif;">* 여러 장의 이미지를 동시에 선택하거나, 여러 번 나누어 등록할 수 있습니다.</small>
       ${photoPreview}
       <label>비고 (선택)</label>
       <input type="text" id="ef-notes" placeholder="참고 자료, 다음에 해야 할 일 등" value="${esc(f.notes)}">
       <div class="row" style="margin-top:18px;">
-        <button class="btn primary" id="btn-save-entry">저장</button>
+        <button class="btn primary" id="btn-save-entry">${state.editingEntryId ? '수정 완료' : '저장'}</button>
         <button class="btn ghost" id="btn-cancel-entry">취소</button>
       </div>
     </div>
@@ -929,6 +1000,7 @@ function bindEvents(){
     el.onclick = async ()=>{
       state.currentProjectId = el.getAttribute('data-open');
       state.entries = [];
+      state.expandedEntryIds = [];
       state.view='detail'; render();
       await loadEntries(state.currentProjectId);
       state.reportText=''; state.formatMode='default'; state.customFormat='';
@@ -984,7 +1056,8 @@ function bindEvents(){
   if(backDetail) backDetail.onclick = ()=>{ state.view='detail'; render(); };
   const btnAddEntry = document.getElementById('btn-add-entry');
   if(btnAddEntry) btnAddEntry.onclick = ()=>{
-    state.entryForm = { date: todayStr(), title:'', summary:'', materials:'', resultData:'', techStack:'', referenceLinks:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[] };
+    state.entryForm = { date: todayStr(), title:'', summary:'', materials:'', resultData:'', techStack:'', referenceLinks:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[], existingPhotos:[], removedPhotos:[] };
+    state.editingEntryId = null;
     state.view='new-entry'; render();
   };
   const btnGotoReport = document.getElementById('btn-goto-report');
@@ -1010,10 +1083,39 @@ function bindEvents(){
       render();
     };
   });
+  document.querySelectorAll('[data-toggle-entry]').forEach(el=>{
+    el.onclick = ()=>{
+      const id = el.getAttribute('data-toggle-entry');
+      const idx = state.expandedEntryIds.indexOf(id);
+      if(idx === -1) state.expandedEntryIds.push(id);
+      else state.expandedEntryIds.splice(idx, 1);
+      render();
+    };
+  });
+  document.querySelectorAll('[data-edit-entry]').forEach(el=>{
+    el.onclick = ()=>{
+      const id = el.getAttribute('data-edit-entry');
+      const entry = state.entries.find(e=>e.id===id);
+      if(!entry) return;
+      state.editingEntryId = id;
+      state.entryForm = {
+        date: entry.date, title: entry.title, summary: entry.summary,
+        materials: entry.materials, resultData: entry.resultData,
+        techStack: entry.techStack, referenceLinks: entry.referenceLinks,
+        codeBlocks: (entry.codeBlocks && entry.codeBlocks.length) ? entry.codeBlocks.map(b=>({...b})) : [{language:'', code:''}],
+        notes: entry.notes,
+        photos: [],
+        existingPhotos: (entry.photos||[]).slice(),
+        removedPhotos: []
+      };
+      state.view = 'new-entry';
+      render();
+    };
+  });
 
   // entry form
   const btnCancelEntry = document.getElementById('btn-cancel-entry');
-  if(btnCancelEntry) btnCancelEntry.onclick = ()=>{ state.view='detail'; render(); };
+  if(btnCancelEntry) btnCancelEntry.onclick = ()=>{ state.editingEntryId = null; state.view='detail'; render(); };
 
   const efDate = document.getElementById('ef-date');
   if(efDate) efDate.oninput = (e)=>{ state.entryForm.date = e.target.value; };
@@ -1088,6 +1190,16 @@ function bindEvents(){
       render();
     };
   });
+  document.querySelectorAll('[data-remove-existing-photo]').forEach(el=>{
+    el.onclick = ()=>{
+      const id = el.getAttribute('data-remove-existing-photo');
+      const idx = state.entryForm.existingPhotos.findIndex(ph=>ph.id===id);
+      if(idx === -1) return;
+      const removed = state.entryForm.existingPhotos.splice(idx, 1)[0];
+      state.entryForm.removedPhotos.push(removed);
+      render();
+    };
+  });
 
   const btnSaveEntry = document.getElementById('btn-save-entry');
   if(btnSaveEntry) btnSaveEntry.onclick = async ()=>{
@@ -1106,13 +1218,17 @@ function bindEvents(){
     const notes = document.getElementById('ef-notes').value.trim();
     if(!summary){ toast('내용 요약을 입력해주세요.'); return; }
     btnSaveEntry.disabled = true;
-    btnSaveEntry.textContent = '저장 중...';
+    btnSaveEntry.textContent = state.editingEntryId ? '수정 중...' : '저장 중...';
     const photoFiles = f.photos.map(p=>p.file);
-    const saved = await saveEntryRemote(state.currentProjectId, { date, title, summary, materials, resultData, techStack, referenceLinks, codeBlocks: f.codeBlocks, notes }, photoFiles);
+    const entryData = { date, title, summary, materials, resultData, techStack, referenceLinks, codeBlocks: f.codeBlocks, notes };
+    const ok = state.editingEntryId
+      ? await updateEntryRemote(state.editingEntryId, entryData, photoFiles, f.removedPhotos)
+      : await saveEntryRemote(state.currentProjectId, entryData, photoFiles);
     btnSaveEntry.disabled = false;
-    if(!saved) return;
+    if(!ok) return;
     f.photos.forEach(p=>URL.revokeObjectURL(p.previewUrl));
-    state.entryForm = { date:'', title:'', summary:'', materials:'', resultData:'', techStack:'', referenceLinks:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[] };
+    state.entryForm = { date:'', title:'', summary:'', materials:'', resultData:'', techStack:'', referenceLinks:'', codeBlocks:[{language:'', code:''}], notes:'', photos:[], existingPhotos:[], removedPhotos:[] };
+    state.editingEntryId = null;
     await loadEntries(state.currentProjectId);
     state.view='detail'; render();
   };
@@ -1240,7 +1356,7 @@ async function generateReport(){
     }
     if(p.type==='exp' && e.resultData) block += `\n결과 데이터: ${e.resultData}`;
     if(p.type==='code' && e.referenceLinks) block += `\n참고 자료: ${e.referenceLinks}`;
-    if(e.photoUrls && e.photoUrls.length) block += `\n(사진 ${e.photoUrls.length}장 첨부됨)`;
+    if(e.photos && e.photos.length) block += `\n(사진 ${e.photos.length}장 첨부됨)`;
     if(e.notes) block += `\n비고: ${e.notes}`;
     return block;
   }).join('\n\n');
