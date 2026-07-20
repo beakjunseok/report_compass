@@ -200,8 +200,13 @@
   /* ---- Report view ---- */
   .report-box{
     background:#fff; border:1.5px solid var(--ink); border-radius:4px; padding:22px 24px; margin-top:16px;
-    white-space:pre-wrap; font-size:14.5px; line-height:1.75; min-height:200px;
+    font-size:14.5px; line-height:1.75; min-height:200px;
   }
+  .report-box .report-h1{font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:18px; margin:18px 0 6px;}
+  .report-box .report-h1:first-child{margin-top:0;}
+  .report-box .report-h2{font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:15.5px; margin:14px 0 4px;}
+  .report-box .report-p{margin:2px 0; white-space:pre-wrap;}
+  .report-box .report-blank{height:10px;}
   .loading{color:var(--ink-soft); font-family:'IBM Plex Mono',monospace; font-size:13px;}
   .format-toggle{display:flex; gap:8px; margin-bottom:10px;}
   .toast{
@@ -320,6 +325,42 @@ function toast(msg){
   t.textContent = msg; t.classList.add('show');
   clearTimeout(toast._h);
   toast._h = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+// AI가 출력한 보고서 텍스트의 가벼운 서식 표시(## 제목, ### 소제목, **강조**)를
+// 줄 단위로 해석해 화면 표시 및 Word 내보내기에 동일하게 사용합니다.
+function parseReportMarkup(text){
+  return (text||'').split('\n').map(line=>{
+    if(/^##\s+/.test(line)) return { type:'h1', text: line.replace(/^##\s+/, '') };
+    if(/^###\s+/.test(line)) return { type:'h2', text: line.replace(/^###\s+/, '') };
+    if(!line.trim()) return { type:'blank', text:'' };
+    return { type:'p', text: line };
+  });
+}
+
+// "**강조**"를 { text, bold } 조각 목록으로 분리
+function splitBoldRuns(text){
+  const parts = [];
+  const re = /\*\*(.+?)\*\*/g;
+  let last = 0, m;
+  while((m = re.exec(text))){
+    if(m.index > last) parts.push({ text: text.slice(last, m.index), bold:false });
+    parts.push({ text: m[1], bold:true });
+    last = re.lastIndex;
+  }
+  if(last < text.length) parts.push({ text: text.slice(last), bold:false });
+  if(!parts.length) parts.push({ text, bold:false });
+  return parts;
+}
+
+function renderReportHtml(text){
+  return parseReportMarkup(text).map(line=>{
+    if(line.type==='blank') return `<div class="report-blank"></div>`;
+    if(line.type==='h1') return `<div class="report-h1">${esc(line.text)}</div>`;
+    if(line.type==='h2') return `<div class="report-h2">${esc(line.text)}</div>`;
+    const html = splitBoldRuns(line.text).map(r=> r.bold ? `<strong>${esc(r.text)}</strong>` : esc(r.text)).join('');
+    return `<div class="report-p">${html}</div>`;
+  }).join('');
 }
 
 // 코드 내용을 보고 프로그래밍 언어를 추정 (간단한 패턴 매칭, 완벽하지 않음)
@@ -948,7 +989,7 @@ function renderReport(){
     ${state.reportLoading ? `<div class="panel"><div class="loading">기록 ${state.entries.length}건을 바탕으로 보고서를 작성하고 있습니다...</div></div>` : ''}
     ${state.reportText ? `
       <div class="section-title">생성된 보고서</div>
-      <div class="report-box" id="report-text" contenteditable="true">${esc(state.reportText)}</div>
+      <div class="report-box" id="report-text" contenteditable="true">${renderReportHtml(state.reportText)}</div>
       <div class="row" style="margin-top:12px;">
         <button class="btn primary" id="btn-copy-report">복사하기</button>
         <button class="btn" id="btn-download-report">텍스트 파일로 저장</button>
@@ -1374,12 +1415,12 @@ function bindEvents(){
   };
   const btnDownloadWord = document.getElementById('btn-download-word');
   if(btnDownloadWord) btnDownloadWord.onclick = async ()=>{
-    const txt = document.getElementById('report-text').innerText;
+    const container = document.getElementById('report-text');
     const p = currentProject();
     btnDownloadWord.disabled = true;
     btnDownloadWord.textContent = '생성 중...';
     try{
-      await downloadReportAsWord(txt, p ? p.name : 'report');
+      await downloadReportAsWord(container, p ? p.name : 'report');
     }catch(err){
       toast('Word 파일 생성 오류: ' + err.message);
     }
@@ -1388,19 +1429,56 @@ function bindEvents(){
   };
 }
 
-// 보고서 텍스트를 .docx 파일로 변환해 다운로드
-async function downloadReportAsWord(text, projectName){
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
-  const paragraphs = (text||'').split('\n').map(line=>{
-    if(!line.trim()) return new Paragraph({ text: '' });
-    return new Paragraph({ children: [ new TextRun(line) ], spacing: { after: 120 } });
+// report-box의 실제 구조(헤더/볼드)를 읽어서 .docx 문단 목록으로 변환
+function domReportToDocxParagraphs(container){
+  const { Paragraph, TextRun, HeadingLevel } = docx;
+  const paragraphs = [];
+  container.childNodes.forEach(node=>{
+    if(node.nodeType === 3){ // 순수 텍스트 노드 (드물게 발생)
+      const t = node.textContent || '';
+      if(t.trim()) paragraphs.push(new Paragraph({ children: [ new TextRun(t) ], spacing: { after: 120 } }));
+      return;
+    }
+    if(node.nodeType !== 1) return;
+    const cls = node.className || '';
+    const text = node.textContent || '';
+    if(cls.includes('report-h1')){
+      paragraphs.push(new Paragraph({ text, heading: HeadingLevel.HEADING_2, spacing: { before: 240, after: 120 } }));
+      return;
+    }
+    if(cls.includes('report-h2')){
+      paragraphs.push(new Paragraph({ text, heading: HeadingLevel.HEADING_3, spacing: { before: 180, after: 100 } }));
+      return;
+    }
+    if(!text.trim()){
+      paragraphs.push(new Paragraph({ text: '' }));
+      return;
+    }
+    const runs = [];
+    node.childNodes.forEach(child=>{
+      if(child.nodeType === 3){
+        if(child.textContent) runs.push(new TextRun(child.textContent));
+      }else if(child.nodeType === 1){
+        const bold = /^(strong|b)$/i.test(child.tagName || '');
+        if(child.textContent) runs.push(new TextRun({ text: child.textContent, bold }));
+      }
+    });
+    if(!runs.length) runs.push(new TextRun(text));
+    paragraphs.push(new Paragraph({ children: runs, spacing: { after: 120 } }));
   });
+  return paragraphs;
+}
+
+// 보고서를 .docx 파일로 변환해 다운로드 (화면에 보이는 굵기/제목 크기 그대로 반영)
+async function downloadReportAsWord(container, projectName){
+  const { Document, Packer, Paragraph, HeadingLevel } = docx;
+  const bodyParagraphs = domReportToDocxParagraphs(container);
   const doc = new Document({
     sections: [{
       properties: {},
       children: [
         new Paragraph({ text: projectName + ' 보고서', heading: HeadingLevel.HEADING_1, spacing: { after: 240 } }),
-        ...paragraphs
+        ...bodyParagraphs
       ]
     }]
   });
@@ -1467,6 +1545,12 @@ ${formatInstruction}
 - 문어체로, 학교 제출용 보고서에 어울리는 정중하고 간결한 문체를 사용해.
 - 날짜를 나열하기보다 하나의 이어지는 이야기처럼 자연스럽게 구성해.
 - 보고서 본문만 출력하고, 서두의 인사말이나 부가 설명은 하지 마.
+
+서식 표시 규칙 (반드시 지켜줘, 이 표시들은 나중에 Word 문서의 실제 글자 크기/굵기로 변환됨):
+- 장/섹션 제목(예: 1. 개발 개요)은 줄 맨 앞에 "## "을 붙여서 써줘. 예: "## 1. 개발 개요"
+- 소제목이 필요하면 "### "을 붙여줘.
+- 문장 중 강조하고 싶은 핵심 단어나 구절은 **이렇게** 별표 두 개로 감싸줘.
+- 이 세 가지 표시 외에 다른 마크다운 문법(목록 기호, 링크 등)은 사용하지 마.
 
 --- 프로젝트 로그 ---
 ${logText}
